@@ -11,6 +11,7 @@ const balance=(s,locationId,productId)=>s.stock.find(r=>r.locationId===locationI
 const close=(actual,expected)=>assert.ok(Math.abs(actual-expected)<0.0001,`${actual} != ${expected}`);
 const approve=(s,doc)=>execute(s,admin,'document.approve',{id:doc.id});
 const transfer=(s,lines=[{productId:'P3',qty:1,unit:'Carton (12)'}])=>execute(s,warehouse,'transfer.create',{branchId:'B1',submit:true,lines});
+const denied=(state,attempt)=>{const before=structuredClone(state);assert.throws(attempt,/You do not have permission for this action\./);assert.deepEqual(state,before);};
 
 test('seed has one central warehouse, four branches and distinct milk variants',()=>{
   const s=seedState();
@@ -63,7 +64,7 @@ test('dispatch captures warehouse cost, receipt posts only good units, explicit 
   close(balance(s,'B1','P3').qty,destination.qty+10);
   close(doc.lines[0].shortQty,1);
   close(doc.lines[0].unresolvedQty,2);
-  assert.throws(()=>execute(s,branch,'document.resolve',{id:doc.id,reason:'loss'}),/Only administrators/);
+  denied(s,()=>execute(s,branch,'document.resolve',{id:doc.id,reason:'loss'}));
   execute(s,admin,'document.resolve',{id:doc.id,reason:'Damage verified and shortage approved.'});
   assert.equal(doc.status,'Completed');
   close(s.losses.find(l=>l.documentId===doc.id).qty,2);
@@ -91,14 +92,14 @@ test('branch scope hides other locations, purchase documents and every monetary 
   assert.equal(view.suppliers.length,0);
   assert.doesNotMatch(JSON.stringify(view),/"(?:avgCost|unitCost|rate|total|value|freight|cost)":/);
   const other=s.documents.find(d=>d.branchId==='B2');
-  assert.throws(()=>execute(s,branch,'document.receive',{id:other.id}),/another location/);
+  denied(s,()=>execute(s,branch,'document.receive',{id:other.id}));
   assert.throws(()=>execute(s,branch,'return.create',{branchId:'B2',lines:[{productId:'P1',qty:1,unit:'Packet'}]}),/assigned branch/);
 });
 
 test('permissions and validation reject bad quantity, wrong units and duplicate product lines',()=>{
   const s=seedState();
   assert.throws(()=>execute(s,{id:'v',name:'Viewer',role:'viewer'},'transfer.create',{}),/read only/);
-  assert.throws(()=>execute(s,branch,'grn.create',{}),/role cannot create/);
+  denied(s,()=>execute(s,branch,'grn.create',{}));
   assert.throws(()=>transfer(s,[{productId:'P3',qty:-1,unit:'Packet'}]),/Quantity/);
   assert.throws(()=>transfer(s,[{productId:'P3',qty:1,unit:'Box of anything'}]),/valid unit/);
   assert.throws(()=>transfer(s,[{productId:'P3',qty:1,unit:'Packet'},{productId:'P3',qty:1,unit:'L'}]),/only once/);

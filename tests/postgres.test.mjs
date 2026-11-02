@@ -164,3 +164,56 @@ test('the shared API initializes, authenticates, posts warehouse stock and recei
   assert.equal(received.state.stock[0].avgCost,undefined);assert.equal(received.state.documents.find(row=>row.id===id).status,'Completed');
   assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM users').first('count'),2);
 });
+
+test('module migration preserves existing accounts and is idempotent on an older PostgreSQL schema',async t=>{
+  const {db,pg}=await fixture(t);
+  await db.prepare('INSERT INTO users(id,email,name,role,password) VALUES(?,?,?,?,?)').bind('kept','kept@example.test','Kept owner','superadmin','kept-hash').run();
+  await pg.exec('ALTER TABLE users DROP COLUMN permissions');
+  const schema=readFileSync(new URL('../postgres/schema.sql',import.meta.url),'utf8');
+  await pg.exec(schema);await pg.exec(schema);
+  const row=await db.prepare('SELECT id,email,password,permissions FROM users WHERE id=?').bind('kept').first();
+  assert.deepEqual(row,{id:'kept',email:'kept@example.test',password:'kept-hash',permissions:null});
+});
+
+test('assigned modules filter every branch response, block reference-based bypasses and revoke stale sessions',async t=>{
+  const {db}=await fixture(t);
+  await initializeWorkspace(db,{initialAdminPassword:testOwnerPassword});
+  const record=await db.prepare("SELECT data FROM application WHERE id='main'").first();
+  const state=JSON.parse(record.data);
+  state.products=[{id:'P',name:'Packet',sku:'PACK',active:true,baseUnit:'pc',units:[{name:'pc',factor:1}]},{id:'UNUSED',name:'Unrelated',active:true,baseUnit:'pc',units:[{name:'pc',factor:1}]}];
+  state.suppliers=[{id:'PRIVATE',name:'Private supplier'}];
+  state.stock=[{locationId:'WH',productId:'P',qty:100,avgCost:90},{locationId:'B1',productId:'P',qty:5,avgCost:90},{locationId:'B2',productId:'P',qty:8,avgCost:90}];
+  const transfer={id:'DISPATCH',reference:'GP-TEST-1',type:'transfer',status:'In transit',branchId:'B1',total:90,lines:[{productId:'P',productName:'Packet',qty:1,unit:'pc',baseQty:1,factor:1,unitCost:90,cost:90}]};
+  state.documents=[transfer,{...transfer,id:'OTHER',reference:'GP-OTHER',branchId:'B2'},{...transfer,id:'DRAFT',reference:'GP-DRAFT',status:'Draft'},{...transfer,id:'RETURN',reference:'RTN-TEST-1',type:'return',status:'Draft'}];
+  state.demands=[{id:'OWN',branchId:'B1'},{id:'OTHER',branchId:'B2'}];
+  await db.prepare("UPDATE application SET data=? WHERE id='main'").bind(JSON.stringify(state)).run();
+  function client(){let cookie='';return {async call(path,body){const response=await handleApi(new Request(`http://hsc.test/api/${path}`,{method:body===undefined?'GET':'POST',headers:{...(cookie?{cookie}:{}),...(body===undefined?{}:{'content-type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})}),db);const received=response.headers.get('set-cookie');if(received)cookie=received.split(';')[0];return{status:response.status,body:await response.json()};},async action(action,payload,revision){return this.call('action',{action,payload,revision});}};}
+  const owner=client(),branch=client();
+  assert.equal((await owner.call('login',{email:'admin@hamsun.local',password:testOwnerPassword})).status,200);
+  let current=(await owner.call('state')).body;
+  let saved=await owner.action('user.save',{name:'Dispatch-only branch',email:'modules@example.test',role:'branch',branchId:'B1',password:'DisposableModule!827',permissions:['dispatches']},current.revision);
+  assert.equal(saved.status,200,JSON.stringify(saved.body));current=saved.body;const id=current.result.id;
+  assert.deepEqual(current.users.find(user=>user.id===id).permissions,['dispatches']);
+  assert.equal((await branch.call('login',{email:'modules@example.test',password:'DisposableModule!827'})).status,200);
+  const visible=(await branch.call('state')).body;
+  assert.deepEqual(visible.user.permissions,['dispatches']);assert.deepEqual(visible.state.documents.map(document=>document.id),['DISPATCH']);
+  assert.equal(visible.state.documents[0].total,undefined);assert.equal(visible.state.documents[0].lines[0].unitCost,undefined);
+  assert.deepEqual(visible.state.products.map(product=>product.id),['P']);
+  for(const key of ['suppliers','stock','audit','ledger','demands'])assert.deepEqual(visible.state[key],[]);
+  for(const action of ['return.create','demand.create','product.save'])assert.equal((await branch.action(action,{},visible.revision)).status,403);
+  assert.equal((await branch.call('password',{})).status,403);
+  const forbidden=await owner.action('user.save',{id,permissions:['users']},current.revision);assert.equal(forbidden.status,400);
+  saved=await owner.action('user.save',{id,permissions:['returns']},current.revision);assert.equal(saved.status,200);current=saved.body;
+  assert.equal((await branch.call('state')).status,401,'Changing grants must invalidate the old session');
+  assert.equal((await branch.call('login',{email:'modules@example.test',password:'DisposableModule!827'})).status,200);
+  const returned=(await branch.call('state')).body;
+  assert.deepEqual(returned.state.documents.map(document=>document.id),['RETURN']);
+  assert.equal(returned.state.stock.length,1);assert.equal(returned.state.stock[0].locationId,'B1');assert.equal(returned.state.stock[0].avgCost,undefined);
+  assert.equal((await branch.action('document.receive',{reference:' gp-test-1 '},returned.revision)).status,403);
+  assert.equal((await branch.action('document.receive',{id:'DISPATCH'},returned.revision)).status,403);
+  saved=await owner.action('user.save',{id,permissions:[]},current.revision);assert.equal(saved.status,200);current=saved.body;
+  assert.equal((await branch.call('login',{email:'modules@example.test',password:'DisposableModule!827'})).status,200);
+  const empty=(await branch.call('state')).body;
+  for(const key of ['products','suppliers','stock','documents','demands','audit','ledger','losses','locations'])assert.deepEqual(empty.state[key],[]);
+  assert.ok(current.state.audit.some(entry=>entry.action==='user.update'&&entry.entityId===id&&entry.detail.includes('Module permissions changed; sessions revoked.')));
+});

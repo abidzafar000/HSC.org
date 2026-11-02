@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Check, Download, Leaf, Plus, ShieldCheck, Users, Warehouse, X } from "lucide-react";
+import { defaultPermissions, normalizePermissions, permissionOptions } from "../lib/permissions.mjs";
+import "./access-permissions.css";
 
 type R = Record<string, any>;
 type Props = {
@@ -20,7 +22,7 @@ const roles = [
   { value: "admin", label: "Administrator", scope: "All locations, master data and independent approvals" },
   { value: "warehouse", label: "Warehouse", scope: "Warehouse dispatch, returns and stock adjustment requests" },
   { value: "purchasing", label: "Purchasing", scope: "Purchase GRNs and purchasing records" },
-  { value: "branch", label: "Branch", scope: "Assigned branch receipts, returns and stock" },
+  { value: "branch", label: "Branch", scope: "Assigned branch dispatch orders, returns and demands" },
   { value: "viewer", label: "Read only", scope: "View records and reports without changing stock" },
 ];
 const roleName = (role: string) => roles.find(r => r.value === role)?.label || role;
@@ -58,7 +60,16 @@ export default function AdminPanel({ page, user, users, locations, busy, act, ap
   }, [editor?.kind]);
 
   function editUser(account?: R) {
-    setEditor({ kind: "user", id: account?.id, name: account?.name || "", email: account?.email || "", role: account?.role || "branch", branchId: account?.branchId || locations.find(l => l.type === "branch")?.id || "B1", active: account?.active !== false && account?.active !== 0, password: "" });
+    const role = account?.role || "branch";
+    setEditor({ kind: "user", id: account?.id, name: account?.name || "", email: account?.email || "", role, branchId: account?.branchId || locations.find(l => l.type === "branch")?.id || "B1", active: account?.active !== false && account?.active !== 0, permissions: account ? normalizePermissions(role, account.permissions) : defaultPermissions(role), password: "" });
+  }
+  function changeRole(role: string) {
+    if (editor) setEditor({ ...editor, role, permissions: defaultPermissions(role) });
+  }
+  function togglePermission(key: string, enabled: boolean) {
+    if (!editor) return;
+    const selected: string[] = editor.permissions || [];
+    setEditor({ ...editor, permissions: enabled ? [...new Set([...selected, key])] : selected.filter(value => value !== key) });
   }
   function editLocation(location: R) {
     setEditor({ kind: "location", id: location.id, name: location.name, address: location.address || "", contact: location.contact || "", phone: location.phone || "" });
@@ -132,9 +143,20 @@ export default function AdminPanel({ page, user, users, locations, busy, act, ap
       {editor.kind === "user" ? <>
         <Field label="Full name *"><input required value={editor.name} onChange={e => setEditor({ ...editor, name: e.target.value })}/></Field>
         <Field label="Email address *"><input required type="email" autoComplete="off" value={editor.email} onChange={e => setEditor({ ...editor, email: e.target.value })}/></Field>
-        <Field label="Role *"><select value={editor.role} disabled={editor.id === user.id} onChange={e => setEditor({ ...editor, role: e.target.value })}>{roles.map(role => <option value={role.value} key={role.value}>{role.label}</option>)}</select></Field>
+        <Field label="Role *"><select value={editor.role} disabled={editor.id === user.id} onChange={e => changeRole(e.target.value)}>{roles.map(role => <option value={role.value} key={role.value}>{role.label}</option>)}</select></Field>
         <Field label="Status"><select value={editor.active ? "active" : "inactive"} disabled={editor.id === user.id} onChange={e => setEditor({ ...editor, active: e.target.value === "active" })}><option value="active">Active</option><option value="inactive">Inactive</option></select></Field>
         {editor.role === "branch" && <Field label="Assigned branch *" wide><select required value={editor.branchId} onChange={e => setEditor({ ...editor, branchId: e.target.value })}>{locations.filter(location => location.type === "branch").map(location => <option key={location.id} value={location.id}>{location.name}</option>)}</select></Field>}
+        <fieldset className="hsc-permissions wide">
+          <legend>Allowed areas</legend>
+          <p>{editor.role === "superadmin" ? "Super Admin keeps complete access to every area." : "This user will only see the selected areas. Their role and assigned branch still limit what they can do."}</p>
+          {editor.role !== "superadmin" && <>
+            <div className="hsc-permission-grid">{permissionOptions(editor.role).map((permission: {key: string; label: string}) => <label className="hsc-permission-choice" key={permission.key}>
+              <input type="checkbox" checked={editor.permissions?.includes(permission.key) || false} onChange={event => togglePermission(permission.key, event.target.checked)}/>
+              <span>{permission.label}</span>
+            </label>)}</div>
+            <div className="hsc-permission-footer"><span>{editor.permissions?.length || 0} areas selected</span><button className="text-button" type="button" onClick={() => setEditor({ ...editor, permissions: defaultPermissions(editor.role) })}>Use role defaults</button></div>
+          </>}
+        </fieldset>
         <Field label={editor.id === user.id ? "Your password" : editor.id ? "Set a new password (optional)" : "Initial password *"} wide><input type="password" required={!editor.id} disabled={editor.id === user.id} minLength={10} autoComplete="new-password" value={editor.password} onChange={e => setEditor({ ...editor, password: e.target.value })} placeholder={editor.id === user.id ? "Change your own password from Security" : editor.id ? "Leave blank to keep the current password" : "At least 10 characters"}/></Field>
         <p className="field wide small muted">{editor.id === user.id ? "Your own Super Admin role and active access remain protected." : roles.find(role => role.value === editor.role)?.scope}</p>
       </> : <>

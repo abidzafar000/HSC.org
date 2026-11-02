@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {seedState,execute} from '../lib/engine.mjs';
+const denied=(state,attempt,pattern=/You do not have permission for this action\./)=>{const before=structuredClone(state);assert.throws(attempt,pattern);assert.deepEqual(state,before);};
 
 const owner={id:'owner',name:'Owner',role:'superadmin'};
 const checker={id:'checker',name:'Checker',role:'admin'};
@@ -40,7 +41,7 @@ test('warehouse additions wait for independent approval and ordinary administrat
   const doc=execute(state,warehouse,'stock.add',payload);
   assert.equal(doc.status,'Pending approval');
   assert.equal(balance(state).qty,before);
-  assert.throws(()=>execute(state,warehouse,'document.approve',{id:doc.id}),/Only administrators/);
+  denied(state,()=>execute(state,warehouse,'document.approve',{id:doc.id}));
   execute(state,checker,'document.approve',{id:doc.id});
   assert.equal(balance(state).qty,before+48);
   assert.equal(doc.status,'Completed');
@@ -70,7 +71,7 @@ test('manual stock additions require WH, positive quantities, valid units and an
   }
   for (const role of ['branch','purchasing','viewer']) {
     const state=seedState(),before=structuredClone(state);
-    assert.throws(()=>execute(state,{...branch,role},'stock.add',payload),/cannot add|read only/);
+    denied(state,()=>execute(state,{...branch,role},'stock.add',payload),role==='viewer'?/read only/:/You do not have permission for this action\./);
     assert.deepEqual(state,before);
   }
 });

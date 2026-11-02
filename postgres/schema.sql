@@ -11,8 +11,10 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL,
   branch_id TEXT,
   password TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1
+  active INTEGER NOT NULL DEFAULT 1,
+  permissions TEXT
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (email);
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,

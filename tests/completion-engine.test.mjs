@@ -11,6 +11,7 @@ const balance=(s,locationId,productId)=>s.stock.find(r=>r.locationId===locationI
 const close=(a,b)=>assert.ok(Math.abs(a-b)<0.0001,`${a} != ${b}`);
 const approve=(s,d)=>execute(s,admin,'document.approve',{id:d.id});
 const grn=(s,user=owner)=>execute(s,user,'grn.create',{supplierId:'S1',submit:true,lines:[{productId:'P1',qty:2,unit:'Packet',rate:65}]});
+const denied=(state,attempt)=>{const before=structuredClone(state);assert.throws(attempt,/You do not have permission for this action\./);assert.deepEqual(state,before);};
 
 test('Super Admin has all operational rights and unscoped records',()=>{
   const s=seedState();
@@ -62,12 +63,12 @@ test('rejected documents reopen with a reason and branch drafts retain scope',()
   execute(s,branch,'document.update',{id:doc.id,lines:[{productId:'P1',qty:3,unit:'Packet'}]});
   assert.equal(doc.lines[0].baseQty,3);
   assert.throws(()=>execute(s,branch,'document.update',{id:doc.id,branchId:'B2'}),/assigned branch/);
-  assert.throws(()=>execute(s,{...branch,id:'branch2',branchId:'B2'},'document.update',{id:doc.id}),/another location/);
+  denied(s,()=>execute(s,{...branch,id:'branch2',branchId:'B2'},'document.update',{id:doc.id}));
 });
 
 test('only Super Admin can configure the existing central warehouse and four branches',()=>{
   const s=seedState(),ids=s.locations.map(l=>l.id);
-  assert.throws(()=>execute(s,admin,'location.save',{id:'B1',name:'Renamed'}),/Super Admin/);
+  denied(s,()=>execute(s,admin,'location.save',{id:'B1',name:'Renamed'}));
   execute(s,owner,'location.save',{id:'B1',name:'Gulberg Main',address:'Main Road',contact:'Branch Manager',phone:'03001234567',type:'warehouse'});
   const location=s.locations.find(l=>l.id==='B1');
   assert.equal(location.type,'branch');
@@ -81,14 +82,14 @@ test('only Super Admin can configure the existing central warehouse and four bra
 
 test('stock adjustment is scoped to warehouse for warehouse users and to all locations for administrators',()=>{
   const s=seedState(),payload={locationId:'WH',note:'Count correction',lines:[{productId:'P1',qty:2,unit:'pc'}]};
-  assert.throws(()=>execute(s,branch,'adjustment.create',payload),/role cannot create/);
+  denied(s,()=>execute(s,branch,'adjustment.create',payload));
   assert.throws(()=>execute(s,warehouse,'adjustment.create',{...payload,locationId:'B1'}),/only Central Warehouse/);
   assert.throws(()=>execute(s,owner,'adjustment.create',{...payload,note:''}),/reason/);
   const doc=execute(s,warehouse,'adjustment.create',{...payload,submit:true});
   assert.equal(doc.type,'adjustment');
   assert.match(doc.reference,/^ADJ-/);
   assert.equal(doc.locationId,'WH');
-  assert.throws(()=>execute(s,warehouse,'document.approve',{id:doc.id}),/Only administrators/);
+  denied(s,()=>execute(s,warehouse,'document.approve',{id:doc.id}));
   approve(s,doc);
   assert.equal(doc.status,'Completed');
   const branchAdjustment=execute(s,owner,'adjustment.create',{...payload,locationId:'B1'});
@@ -110,7 +111,7 @@ test('approved signed adjustments conserve their value and cannot post again',()
   assert.ok(movements.every(l=>l.kind==='Stock adjustment'));
   close(movements.reduce((v,l)=>v+l.value,0),doc.total);
   assert.throws(()=>approve(s,doc),/Only pending/);
-  assert.throws(()=>execute(s,owner,'document.dispatch',{id:doc.id}),/Only approved gate passes/);
+  denied(s,()=>execute(s,owner,'document.dispatch',{id:doc.id}));
 });
 
 test('zero optional rate uses the existing average cost, while a new opening still requires a rate',()=>{
@@ -155,9 +156,11 @@ test('a flagged legacy fractional piece balance can be corrected to a whole phys
   assert.equal(item.avgCost,beforeCost);
   const branchView=scopedState(s,branch);
   const visible=branchView.documents.find(d=>d.id===doc.id);
-  assert.ok(visible);
-  assert.equal('total' in visible,false);
-  assert.equal('unitCost' in visible.lines[0],false);
+  assert.equal(visible,undefined);
+  assert.deepEqual(branchView.audit,[]);
+  assert.deepEqual(branchView.ledger,[]);
+  assert.equal(branchView.stock.find(row=>row.locationId==='B1'&&row.productId==='P1').qty,153);
+  assert.doesNotMatch(JSON.stringify(branchView),/"(?:avgCost|unitCost|total|value|rate)":/);
   assert.throws(()=>execute(s,owner,'adjustment.create',{locationId:'B1',note:'Bad half piece',lines:[{productId:'P1',qty:0.5,unit:'pc'}]}),/whole number/);
 });
 
@@ -186,7 +189,7 @@ test('returned branch stock discrepancies recover at the correct source branch',
   execute(s,branch,'document.dispatch',{id:doc.id});
   const dispatched=balance(s,'B1','P1').qty;
   execute(s,warehouse,'document.receive',{id:doc.id,lines:[{productId:'P1',receivedQty:2,damagedQty:1}]});
-  assert.throws(()=>execute(s,branch,'document.resolve',{id:doc.id,resolutionMode:'returned',reason:'Attempt'}),/Only administrators/);
+  denied(s,()=>execute(s,branch,'document.resolve',{id:doc.id,resolutionMode:'returned',reason:'Attempt'}));
   execute(s,admin,'document.resolve',{id:doc.id,resolutionMode:'returned',reason:'Two packets located and returned to the branch.'});
   close(balance(s,'B1','P1').qty,dispatched+2);
   assert.equal(doc.lines[0].returnedQty,2);

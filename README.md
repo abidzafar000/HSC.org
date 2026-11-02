@@ -37,3 +37,13 @@ pnpm build
 The suite includes stock/costing/workflow checks and real PostgreSQL semantics through disposable PGlite databases. Those tests do not modify the HSC cloud database. The adapter preserves atomic revisions, account audit writes, sessions and scoped permissions while translating the shared API’s SQL dialect.
 
 Phase 2 consumption tracking remains excluded.
+
+## Branch portal and user permissions
+
+Super Admin can select **Allowed areas** for each user in **Access & roles**. These selections narrow the user's role and branch scope; they cannot grant authority outside that role. Permission changes are audited and close the affected user's sessions so their next sign-in receives the new access.
+
+Branch users start with **Dispatch orders**, **Branch returns** and **Branch demands**. They see only their assigned branch's issued deliveries, returns and demands, with monetary information removed. They do not receive warehouse drafts, other branches' records, reports, master-data screens or administration screens. Unselected modules are hidden in navigation and blocked by the server.
+
+A branch can submit item quantities and units as a demand. The central team reviews the request, approves or rejects it, and can turn an approved demand into a linked gate-pass draft. Existing approval, dispatch and receipt controls still apply. A demand itself does not move stock. Received deliveries also offer a return action, subject to the branch's return permission, received quantities and available stock.
+
+After upgrading an existing deployment, run the idempotent database migration before releasing the new code. The nullable `users.permissions` column preserves role defaults for existing users and does not recreate accounts or reset credentials.
