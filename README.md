@@ -47,3 +47,9 @@ Branch users start with **Dispatch orders**, **Branch returns** and **Branch dem
 A branch can submit item quantities and units as a demand. The central team reviews the request, approves or rejects it, and can turn an approved demand into a linked gate-pass draft. Existing approval, dispatch and receipt controls still apply. A demand itself does not move stock. Received deliveries also offer a return action, subject to the branch's return permission, received quantities and available stock.
 
 After upgrading an existing deployment, run the idempotent database migration before releasing the new code. The nullable `users.permissions` column preserves role defaults for existing users and does not recreate accounts or reset credentials.
+
+## Name-only catalogue imports
+
+Authorized product administrators can import a list of item names without importing monthly balances. The batch removes repeated names, skips existing catalogue names and records an import fingerprint and audit entry. Imported names start as inactive **Setup needed** drafts with no invented unit, category, rate or opening quantity. Configure the required fields and enable an item before using it in a transaction. Draft imports and their private metadata are hidden from operational and branch users.
+
+Reference purchase rates are optional and separate from stock costing. A blank reference rate remains unknown; an explicit zero remains zero. Actual receipt and stock-addition rates continue to determine inventory cost.
