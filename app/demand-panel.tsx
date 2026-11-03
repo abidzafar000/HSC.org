@@ -10,6 +10,8 @@ type Props = {
   busy:boolean; search:string; filter:string; locationId:string;
   act:(action:string,payload:R,message?:string)=>Promise<boolean>;
   onOpenTransfer:(id:string)=>void;
+  openRequest?:{id:string;token:number}|null;
+  onOpenRequestHandled?:()=>void;
 };
 const today=()=>new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 const number=(value:any)=>new Intl.NumberFormat("en-PK",{maximumFractionDigits:6}).format(Number(value||0));
@@ -19,7 +21,7 @@ const preferredUnit=(product:R)=>product.units?.find((value:R)=>value.name===pro
 function Field({label,children,wide=false}:{label:string;children:ReactNode;wide?:boolean}){return <label className={`field ${wide?"wide":""}`}><span>{label}</span>{children}</label>;}
 function Status({value}:{value:string}){return <span className={`badge status-${value.toLowerCase().replaceAll(" ","-")}`}><i/>{value}</span>;}
 
-export default function DemandPanel({user,demands,products,locations,documents,busy,search,filter,locationId,act,onOpenTransfer}:Props){
+export default function DemandPanel({user,demands,products,locations,documents,busy,search,filter,locationId,act,onOpenTransfer,openRequest,onOpenRequestHandled}:Props){
   const [editor,setEditor]=useState<R|null>(null),[selectedId,setSelectedId]=useState<string|null>(null),[reason,setReason]=useState("");
   const dialogRef=useRef<HTMLElement>(null);
   const branch=user.role==="branch",admin=["superadmin","admin"].includes(user.role),reviewer=admin||user.role==="warehouse";
@@ -30,6 +32,10 @@ export default function DemandPanel({user,demands,products,locations,documents,b
   const branchName=(id:string)=>locations.find(location=>location.id===id)?.name||id;
   const product=(id:string)=>products.find(product=>product.id===id);
   const close=()=>{setEditor(null);setSelectedId(null);setReason("");};
+  useEffect(()=>{
+    if(!openRequest||!demands.some(demand=>demand.id===openRequest.id))return;
+    setEditor(null);setSelectedId(openRequest.id);setReason("");onOpenRequestHandled?.();
+  },[openRequest?.id,openRequest?.token]);
   useEffect(()=>{
     if(!editor&&!selectedId)return;
     const previous=document.activeElement as HTMLElement|null;

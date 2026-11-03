@@ -46,6 +46,8 @@ Branch users start with **Dispatch orders**, **Branch returns** and **Branch dem
 
 A branch can submit item quantities and units as a demand. The central team reviews the request, approves or rejects it, and can turn an approved demand into a linked gate-pass draft. Existing approval, dispatch and receipt controls still apply. A demand itself does not move stock. Received deliveries also offer a return action, subject to the branch's return permission, received quantities and available stock.
 
+While the portal is open, authorized central administrators and warehouse reviewers receive an in-app popup for submitted branch demands. A small read-only inbox refreshes every ten seconds while the page is visible and checks again on focus or reconnection. The popup identifies the branch, reference and item count, and opens the current demand for review. Drafts and the reviewer's own requests do not notify. Dismissed submissions stay acknowledged for that user in the same browser, including across tabs; resubmitting a rejected request creates a new alert. Unseen pending requests also appear after sign-in. The popup does not require browser notification permission and does not send alerts when the portal is closed.
+
 After upgrading an existing deployment, run the idempotent database migration before releasing the new code. The nullable `users.permissions` column preserves role defaults for existing users and does not recreate accounts or reset credentials.
 
 ## Name-only catalogue imports
