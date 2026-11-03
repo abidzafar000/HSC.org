@@ -67,3 +67,25 @@ test('module response filtering retains return form support and removes unrelate
   for(const key of ['products','suppliers','documents','stock','demands','ledger','audit','losses','locations'])assert.deepEqual(noAccess[key],[]);
   assert.equal(data.stock.length,2,'Filtering must not mutate persisted records');
 });
+
+test('approvals-only reviewers receive supplier names for visible GRNs without the supplier catalogue or contacts',()=>{
+  const suppliers=[
+    {id:'S1',name:'Referenced supplier',contact:'Private contact',phone:'Private phone',email:'private@example.test',active:true},
+    {id:'S2',name:'Unrelated supplier',contact:'Hidden contact',active:true},
+  ];
+  const state={
+    suppliers,
+    documents:[
+      {id:'G1',type:'grn',status:'Pending approval',supplierId:'S1',lines:[{productId:'P1'}]},
+      {id:'G2',type:'grn',status:'Draft',supplierId:'S2',lines:[{productId:'P2'}]},
+      {...transfer,lines:[{productId:'P1'}]},
+    ],
+    products:[{id:'P1'},{id:'P2'}],stock:[],demands:[],ledger:[],audit:[],losses:[],locations:[],
+  };
+  const reviewer=filterModuleState(state,{id:'reviewer',role:'admin',permissions:['approvals']});
+  assert.deepEqual(reviewer.documents.map(document=>document.id),['G1']);
+  assert.deepEqual(reviewer.suppliers,[{id:'S1',name:'Referenced supplier'}]);
+  assert.deepEqual(filterModuleState(state,branch).suppliers,[],'Branch users receive no supplier names or contacts');
+  assert.deepEqual(filterModuleState(state,{role:'purchasing',permissions:['purchases']}).suppliers,suppliers,'Explicit purchasing access retains its supplier form support');
+  assert.equal(suppliers[0].contact,'Private contact','The minimal projection must not mutate the stored supplier');
+});

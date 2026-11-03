@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {availableLineProducts, canAddDocumentLine, documentPrerequisite, newProductNameIssue} from '../lib/document-form.mjs';
+import {availableLineProducts, canAddDocumentLine, dispatchReturnAllowances, documentPrerequisite, newProductNameIssue} from '../lib/document-form.mjs';
 
 const products = [{id:'A',active:true},{id:'B',active:true},{id:'C',active:false}];
 
@@ -36,4 +36,30 @@ test('new GRN items flag normalized catalogue and line duplicates, including pen
   assert.match(newProductNameIssue(catalogue,lines,1),/another line/);
   assert.equal(newProductNameIssue(catalogue,[{newProduct:{name:'Green tea'}}],0),'');
   assert.equal(newProductNameIssue(catalogue,[{productId:'A'}],0),'');
+});
+
+test('linked-return choices use received dispatch items, branch balance and net prior reservations', () => {
+  const source={id:'T1',type:'transfer',status:'Discrepancy',branchId:'B1',lines:[{productId:'A',receivedQty:8,recoveredQty:2},{productId:'B',receivedQty:0,damagedQty:2},{productId:'C',receivedQty:2}]};
+  const returns=[
+    {id:'R1',type:'return',sourceTransferId:'T1',status:'Completed',lines:[{productId:'A',baseQty:7,returnedQty:3}]},
+    {id:'R2',type:'return',sourceTransferId:'T1',status:'Cancelled',lines:[{productId:'A',baseQty:90}]},
+    {id:'R3',type:'return',sourceTransferId:'T1',status:'Rejected',lines:[{productId:'A',baseQty:90}]},
+    {id:'R4',type:'return',sourceTransferId:'OTHER',status:'Draft',lines:[{productId:'A',baseQty:90}]},
+  ];
+  const stock=[{locationId:'B1',productId:'A',qty:9},{locationId:'B1',productId:'B',qty:20},{locationId:'B1',productId:'C',qty:0},{locationId:'WH',productId:'C',qty:40}];
+  const before=structuredClone({source,returns,stock});
+  const choices=dispatchReturnAllowances(source,returns,stock);
+  assert.deepEqual([...choices],[['A',6]]);
+  assert.deepEqual(availableLineProducts([{id:'A',active:true},{id:'B',active:true},{id:'C',active:true}].filter(item=>choices.has(item.id)),[]).map(item=>item.id),['A']);
+  assert.deepEqual({source,returns,stock},before);
+});
+
+test('editing a linked return excludes its own reservation and caps quantities at actual branch stock', () => {
+  const source={id:'T1',type:'transfer',status:'Completed',branchId:'B1',lines:[{productId:'A',receivedQty:10}]};
+  const returns=[{id:'EDIT',type:'return',sourceTransferId:'T1',status:'Draft',lines:[{productId:'A',baseQty:7}]}];
+  const stock=[{locationId:'B1',productId:'A',qty:6}];
+  assert.equal(dispatchReturnAllowances(source,returns,stock).get('A'),3);
+  assert.equal(dispatchReturnAllowances(source,returns,stock,'EDIT').get('A'),6);
+  assert.equal(dispatchReturnAllowances({...source,status:'In transit'},returns,stock).size,0);
+  assert.equal(dispatchReturnAllowances(undefined,returns,stock).size,0);
 });
