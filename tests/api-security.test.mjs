@@ -12,8 +12,12 @@ async function fixture(t){
   const pg=new PGlite();t.after(()=>pg.close());
   await pg.exec(readFileSync(new URL('../postgres/schema.sql',import.meta.url),'utf8'));
   const full=result=>({rows:result.rows,rowCount:result.affectedRows??result.rows.length});
+  let failUserListing=false;
   const db=createDatabase({
-    query(sql,parameters){return {sql,parameters,then(resolve,reject){return pg.query(sql,[...parameters]).then(full).then(resolve,reject);}};},
+    query(sql,parameters){return {sql,parameters,then(resolve,reject){
+      if(failUserListing&&sql==='SELECT id,name,email,role,branch_id,active,permissions FROM users ORDER BY name')return Promise.reject(new Error('fetch failed')).then(resolve,reject);
+      return pg.query(sql,[...parameters]).then(full).then(resolve,reject);
+    }};},
     transaction(queries){return pg.transaction(async tx=>{const results=[];for(const query of queries)results.push(full(await tx.query(query.sql,[...query.parameters])));return results;});},
   });
   await initializeWorkspace(db,{initialAdminPassword:password});
@@ -25,7 +29,7 @@ async function fixture(t){
     }),db);
     return {status:response.status,body:await response.json(),cookie:response.headers.get('set-cookie')};
   }
-  return {db,call};
+  return {db,call,setUserListingFailure(value){failUserListing=value;}};
 }
 
 test('login locks survive caller IP-header rotation, then expire normally without weakening session checks',async t=>{
@@ -49,4 +53,37 @@ test('login locks survive caller IP-header rotation, then expire normally withou
   const loggedOut=await call('logout',{}, {cookie});
   assert.equal(loggedOut.status,200);assert.match(loggedOut.cookie,/Max-Age=0/);
   assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM sessions').first('count'),0);
+});
+
+test('response-only account reads finish before a product setup and opening quantity can commit',async t=>{
+  const {db,call,setUserListingFailure}=await fixture(t);
+  const login=await call('login',{email:'admin@hamsun.local',password});
+  assert.equal(login.status,200);
+  const headers={cookie:login.cookie.split(';')[0]};
+  const imported=await call('action',{action:'product.import',payload:{names:['Disposable setup item']}},headers);
+  assert.equal(imported.status,200);
+  const draft=imported.body.state.products[0];
+  const payload={...draft,category:'Packaging',baseUnit:'pc',units:[{name:'pc',factor:1}],rate:80,reorderLevel:0,active:true,warehouseQuantity:100,warehouseExpectedQuantity:0,warehouseRate:80};
+  const stored=()=>db.prepare("SELECT data,revision FROM application WHERE id='main'").first();
+  const before=await stored();
+
+  setUserListingFailure(true);
+  const interrupted=await call('action',{action:'product.save',payload,revision:before.revision},headers);
+  assert.equal(interrupted.status,400);
+  assert.equal(interrupted.body.error,'fetch failed');
+  assert.deepEqual(await stored(),before,'A failed response-only read must preserve the setup draft, warehouse stock, audit and revision');
+
+  setUserListingFailure(false);
+  const saved=await call('action',{action:'product.save',payload,revision:before.revision},headers);
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  assert.equal(saved.body.revision,before.revision+1);
+  const product=saved.body.state.products.find(item=>item.id===draft.id);
+  assert.equal(product.active,true);assert.equal(product.setupPending,undefined);
+  assert.deepEqual(saved.body.state.stock.map(({productId,locationId,qty,avgCost})=>({productId,locationId,qty,avgCost})),[{productId:draft.id,locationId:'WH',qty:100,avgCost:80}]);
+  assert.equal(saved.body.state.documents.length,1);
+  assert.equal(saved.body.state.documents[0].status,'Completed');
+  assert.deepEqual(saved.body.users.map(user=>user.id),['admin']);
+  const persisted=await stored();
+  assert.equal(persisted.revision,saved.body.revision);
+  assert.deepEqual(JSON.parse(persisted.data).stock,saved.body.state.stock);
 });

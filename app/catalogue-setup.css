@@ -3,3 +3,6 @@
 .catalogue-setup-notice strong{display:block;margin-bottom:4px}
 .badge.status-setup-needed{background:#fbf3dc;color:#96763c}
 .badge.status-setup-needed i{background:#b6924e}
+
+/* Keep lasting save feedback clear of the product form actions. */
+.toast.persistent{top:16px;bottom:auto;left:50%;max-width:min(620px,calc(100% - 32px))}
